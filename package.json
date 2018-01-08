@@ -3,5 +3,23 @@
   "version": "1.0.0",
   "main": "index.js",
   "author": "Evan Siroky <evan.siroky@yahoo.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "async": "^2.6.0",
+    "gtfs-sequelize": "^2.0.1",
+    "jsts": "^1.5.0",
+    "pg": "6.1.2",
+    "pg-copy-streams": "^1.2.0",
+    "pg-hstore": "^2.3.2",
+    "request": "^2.83.0",
+    "tracer": "^0.8.11"
+  },
+  "devDependencies": {
+    "eslint": "^4.14.0",
+    "eslint-config-standard": "^11.0.0-beta.0",
+    "eslint-plugin-import": "^2.8.0",
+    "eslint-plugin-node": "^5.2.1",
+    "eslint-plugin-promise": "^3.6.0",
+    "eslint-plugin-standard": "^3.0.1"
+  }
 }
