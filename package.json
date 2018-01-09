@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "author": "Evan Siroky <evan.siroky@yahoo.com>",
-  "license": "MIT",
+  "license": "YIMBY",
   "dependencies": {
     "async": "^2.6.0",
     "gtfs-sequelize": "^2.0.1",
