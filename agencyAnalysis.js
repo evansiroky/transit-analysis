@@ -77,6 +77,7 @@ function findManuallyCreatedAgencies (agenciesFromTransitFeeds, callback) {
 function analyzeAgency (agency, callback) {
   logger.info('analyzeAgency')
   const agencyFolder = path.join(AGENCY_DATA_DIRECTORY, agency.safeId)
+
   const gtfs = GTFS({
     database: 'postgres://postgres@localhost:5432/sb-827-analysis',
     downloadsDir: agencyFolder,
@@ -146,213 +147,230 @@ function analyzeAgency (agency, callback) {
     )
   }
 
-  async.auto(
-    {
-      // see if folder for agency exists
-      checkFolderExistance: cb => {
-        logger.info('checkFolderExistance')
-        fs.stat(agencyFolder, (err, stats) => {
-          if (err && err.code === 'ENOENT') {
-            // folder does not exist, create it
-            fs.mkdir(agencyFolder, cb)
-          } else if (err) {
-            // some other error
-            cb(err)
-          } else {
-            // folder exists
-            cb()
-          }
-        })
-      },
-      // see if gtfs should be downloaded
-      checkForGtfs: ['checkFolderExistance', (results, cb) => {
-        logger.info('checkForGtfs')
-        // TODO: download most recent data
-        // for now simply check if a gtfs file exists.  If not, download it
-        const agencyGtfs = path.join(agencyFolder, 'google_transit.zip')
-        fs.stat(agencyGtfs, (err, stats) => {
-          if (err && err.code === 'ENOENT') {
-            // zip file does not exist, download it
-            if (!agency.u || !agency.u.d) {
-              // no download link!
-              logger.warn(`${agency.safeId} does not have a gtfs dl url or gtfs file!`)
-              cb()
+  function analyze () {
+    async.auto(
+      {
+        // see if folder for agency exists
+        checkFolderExistance: cb => {
+          logger.info('checkFolderExistance')
+          fs.stat(agencyFolder, (err, stats) => {
+            if (err && err.code === 'ENOENT') {
+              // folder does not exist, create it
+              fs.mkdir(agencyFolder, cb)
+            } else if (err) {
+              // some other error
+              cb(err)
             } else {
-              gtfs.downloadGtfs(cb)
+              // folder exists
+              cb()
             }
-          } else if (err) {
-            // some other error
-            cb(err)
-          } else {
-            // zip file exists
-            cb()
-          }
-        })
-      }],
-      // load gtfs into db
-      loadGtfs: ['checkForGtfs', (results, cb) => {
-        logger.info('loadGtfs')
-        // check if schema already exists, if not, load data into db
+          })
+        },
+        // see if gtfs should be downloaded
+        checkForGtfs: ['checkFolderExistance', (results, cb) => {
+          logger.info('checkForGtfs')
+          // TODO: download most recent data
+          // for now simply check if a gtfs file exists.  If not, download it
+          const agencyGtfs = path.join(agencyFolder, 'google_transit.zip')
+          fs.stat(agencyGtfs, (err, stats) => {
+            if (err && err.code === 'ENOENT') {
+              // zip file does not exist, download it
+              if (!agency.u || !agency.u.d) {
+                // no download link!
+                logger.warn(`${agency.safeId} does not have a gtfs dl url or gtfs file!`)
+                cb()
+              } else {
+                gtfs.downloadGtfs(cb)
+              }
+            } else if (err) {
+              // some other error
+              cb(err)
+            } else {
+              // zip file exists
+              cb()
+            }
+          })
+        }],
+        // load gtfs into db
+        loadGtfs: ['checkForGtfs', (results, cb) => {
+          logger.info('loadGtfs')
+          // check if schema already exists, if not, load data into db
 
-        /**
-         * Helper fn to create a schema and then load the data
-         */
-        function createSchemaAndLoad () {
-          logger.info('createSchemaAndLoad')
-          db.sequelize.query(`create schema if not exists "${agency.safeId}"`)
-            .then(() => {
-              logger.info('schema created')
-              gtfs.loadGtfs(err => {
-                if (err) {
-                  logger.error('error loading gtfs', err)
-                }
+          /**
+           * Helper fn to create a schema and then load the data
+           */
+          function createSchemaAndLoad () {
+            logger.info('createSchemaAndLoad')
+            db.sequelize.query(`create schema if not exists "${agency.safeId}"`)
+              .then(() => {
+                logger.info('schema created')
+                gtfs.loadGtfs(err => {
+                  if (err) {
+                    logger.error('error loading gtfs', err)
+                  }
+                  cb(err)
+                })
+              })
+              .catch(err => {
+                logger.error(err)
                 cb(err)
               })
+          }
+          db.route.findAll()
+            .then((routes) => {
+              if (routes.length > 0) {
+                // some routes exist assume databse is already loaded
+                cb()
+              } else {
+                createSchemaAndLoad()
+              }
+            })
+            .catch(
+              // assume error means db is not loaded
+              createSchemaAndLoad
+            )
+        }],
+        // get serviceIds for magic date
+        getServiceIds: ['loadGtfs', (results, cb) => {
+          const date = moment(ANALYSIS_DATE)
+          const dow = date.day()
+          let dowKey
+          switch (dow) {
+            case 0:
+              dowKey = 'sunday'
+              break
+            case 1:
+              dowKey = 'monday'
+              break
+            case 2:
+              dowKey = 'tuesday'
+              break
+            case 3:
+              dowKey = 'wednesday'
+              break
+            case 4:
+              dowKey = 'thursday'
+              break
+            case 5:
+              dowKey = 'friday'
+              break
+            case 6:
+              dowKey = 'saturday'
+              break
+          }
+
+          const applicableServiceIds = []
+          db.calendar.findAll({
+            include: [db.calendar_date]
+          })
+            .then(calendars => {
+              calendars.forEach(calendar => {
+                // determine if calendar is in range
+                if (
+                  moment(calendar.start_date).isSameOrBefore(date) &&
+                  moment(calendar.end_date).isSameOrAfter(date)
+                ) {
+                  // get default validity
+                  let isValid = calendar[dowKey] === 1
+
+                  // check if any exception dates apply
+                  for (var i = 0; i < calendar.calendar_dates.length; i++) {
+                    const exception = calendar.calendar_dates[i]
+                    if (exception.date === ANALYSIS_DATE) {
+                      // exception applies
+                      if (exception.exception_type === 1) {
+                        isValid = true
+                      } else {
+                        isValid = false
+                      }
+                      break
+                    }
+                  }
+
+                  if (isValid) {
+                    applicableServiceIds.push(calendar.service_id)
+                  }
+                }
+              })
+              cb(null, applicableServiceIds)
             })
             .catch(err => {
               logger.error(err)
               cb(err)
             })
-        }
-        db.route.findAll()
-          .then((routes) => {
-            if (routes.length > 0) {
-              // some routes exist assume databse is already loaded
-              cb()
-            } else {
-              createSchemaAndLoad()
-            }
+        }],
+        // find all active bus stops
+        findAllActiveBusStops: ['getServiceIds', (results, cb) => {
+          logger.info('findAllActiveBusStops')
+          // make query for active bus stops
+          makeStopQuery({
+            routeType: ' = 3',
+            serviceIds: results.getServiceIds
           })
-          .catch(
-            // assume error means db is not loaded
-            createSchemaAndLoad
-          )
-      }],
-      // get serviceIds for magic date
-      getServiceIds: ['loadGtfs', (results, cb) => {
-        const date = moment(ANALYSIS_DATE)
-        const dow = date.day()
-        let dowKey
-        switch (dow) {
-          case 0:
-            dowKey = 'sunday'
-            break
-          case 1:
-            dowKey = 'monday'
-            break
-          case 2:
-            dowKey = 'tuesday'
-            break
-          case 3:
-            dowKey = 'wednesday'
-            break
-          case 4:
-            dowKey = 'thursday'
-            break
-          case 5:
-            dowKey = 'friday'
-            break
-          case 6:
-            dowKey = 'saturday'
-            break
-        }
-
-        const applicableServiceIds = []
-        db.calendar.findAll({
-          include: [db.calendar_date]
-        })
-          .then(calendars => {
-            calendars.forEach(calendar => {
-              // determine if calendar is in range
-              if (
-                moment(calendar.start_date).isSameOrBefore(date) &&
-                moment(calendar.end_date).isSameOrAfter(date)
-              ) {
-                // get default validity
-                let isValid = calendar[dowKey] === 1
-
-                // check if any exception dates apply
-                for (var i = 0; i < calendar.calendar_dates.length; i++) {
-                  const exception = calendar.calendar_dates[i]
-                  if (exception.date === ANALYSIS_DATE) {
-                    // exception applies
-                    if (exception.exception_type === 1) {
-                      isValid = true
-                    } else {
-                      isValid = false
-                    }
-                    break
-                  }
-                }
-
-                if (isValid) {
-                  applicableServiceIds.push(calendar.service_id)
-                }
-              }
+            .then(stops => {
+              // make active bus stop point geojson
+              outputStopGeojson('bus', stops, cb)
             })
-            cb(null, applicableServiceIds)
+            .catch(err => {
+              logger.error(err)
+              cb(err)
+            })
+        }],
+        // find all rail stops
+        findAllRailStops: ['getServiceIds', (results, cb) => {
+          logger.info('findAllRailStops')
+          // make query for active rail stops
+          makeStopQuery({
+            routeType: ' IN (0, 1, 2)',
+            serviceIds: results.getServiceIds
           })
-          .catch(err => {
-            logger.error(err)
-            cb(err)
+            .then(stops => {
+              // make active rail stop point geojson
+              outputStopGeojson('rail', stops, cb)
+            })
+            .catch(err => {
+              logger.error(err)
+              cb(err)
+            })
+        }],
+        // find all ferry stops
+        findAllFerryStops: ['getServiceIds', (results, cb) => {
+          logger.info('findAllFerryStops')
+          // make query for active ferry stops
+          makeStopQuery({
+            routeType: ' = 4',
+            serviceIds: results.getServiceIds
           })
-      }],
-      // find all active bus stops
-      findAllActiveBusStops: ['getServiceIds', (results, cb) => {
-        logger.info('findAllActiveBusStops')
-        // make query for active bus stops
-        makeStopQuery({
-          routeType: ' = 3',
-          serviceIds: results.getServiceIds
-        })
-          .then(stops => {
-            // make active bus stop point geojson
-            outputStopGeojson('bus', stops, cb)
-          })
-          .catch(err => {
-            logger.error(err)
-            cb(err)
-          })
-      }],
-      // find all rail stops
-      findAllRailStops: ['getServiceIds', (results, cb) => {
-        logger.info('findAllRailStops')
-        // make query for active rail stops
-        makeStopQuery({
-          routeType: ' IN (0, 1, 2)',
-          serviceIds: results.getServiceIds
-        })
-          .then(stops => {
-            // make active rail stop point geojson
-            outputStopGeojson('rail', stops, cb)
-          })
-          .catch(err => {
-            logger.error(err)
-            cb(err)
-          })
-      }],
-      // find all ferry stops
-      findAllFerryStops: ['getServiceIds', (results, cb) => {
-        logger.info('findAllFerryStops')
-        // make query for active ferry stops
-        makeStopQuery({
-          routeType: ' = 4',
-          serviceIds: results.getServiceIds
-        })
-          .then(stops => {
-            // make active ferry stop point geojson
-            outputStopGeojson('ferry', stops, cb)
-          })
-          .catch(err => {
-            logger.error(err)
-            cb(err)
-          })
-      }]
-      // TODO: bus headway calculations
-      // output linestring geometry of applicable bus headway corridors
-    },
-    callback
-  )
+            .then(stops => {
+              // make active ferry stop point geojson
+              outputStopGeojson('ferry', stops, cb)
+            })
+            .catch(err => {
+              logger.error(err)
+              cb(err)
+            })
+        }]
+        // TODO: bus headway calculations
+        // output linestring geometry of applicable bus headway corridors
+      },
+      callback
+    )
+  }
+
+  // check if output files have already been generated
+  // if so assume already complete from earlier run
+  fs.stat(path.join(agencyFolder, 'bus-stop-geo.json'), (err, stats) => {
+    if (err && err.code === 'ENOENT') {
+      // file does not exist, perform analysis
+      analyze()
+    } else if (err) {
+      // some other error
+      callback(err)
+    } else {
+      // output exists, assume no need to recalculate
+      callback()
+    }
+  })
 }
 
 // find all gtfs's via transitfeeds
