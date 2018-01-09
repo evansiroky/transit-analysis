@@ -8,6 +8,7 @@
     "async": "^2.6.0",
     "gtfs-sequelize": "^2.0.1",
     "jsts": "^1.5.0",
+    "moment": "^2.20.1",
     "pg": "6.1.2",
     "pg-copy-streams": "^1.2.0",
     "pg-hstore": "^2.3.2",

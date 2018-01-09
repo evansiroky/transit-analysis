@@ -3,12 +3,14 @@ const path = require('path')
 
 const async = require('async')
 const GTFS = require('gtfs-sequelize')
+const moment = require('moment')
 const request = require('request')
 const logger = require('tracer').colorConsole()
 
 const config = require('./config.json')
 
 const AGENCY_DATA_DIRECTORY = './agency-data'
+const ANALYSIS_DATE = '20180110'
 const MAX_CONCURRENCY = 4
 
 /**
@@ -86,6 +88,64 @@ function analyzeAgency (agency, callback) {
     },
     spatial: false
   })
+  const db = gtfs.connectToDatabase()
+
+  /**
+   * Make a query of the stops of an agency by route type
+   */
+  function makeStopQuery (cfg) {
+    let query = `
+      SELECT stop.stop_id, stop.stop_lat, stop.stop_lon
+      FROM "${agency.safeId}".stop stop, "${agency.safeId}".stop_time stop_time, "${agency.safeId}".trip trip, "${agency.safeId}".route route
+      WHERE stop.stop_id = stop_time.stop_id
+        AND stop_time.trip_id = trip.trip_id
+        AND trip.route_id = route.route_id
+        AND route.route_type ${cfg.routeType}
+        AND trip.service_id IN (`
+
+    for (var i = 0; i < cfg.serviceIds.length; i++) {
+      const serviceId = cfg.serviceIds[i]
+      if (i > 0) {
+        query += ', '
+      }
+      query += `'${serviceId}'`
+    }
+
+    query += ')'
+
+    return db.sequelize.query(query, { model: db.stop })
+  }
+
+  /**
+   * Write a geojson file with the corresponding stops
+   */
+  function outputStopGeojson (type, stops, cb) {
+    const geojson = {
+      type: 'FeatureCollection',
+      features: stops.map(stop => {
+        return {
+          type: 'Feature',
+          properties: {
+            agency: agency.safeId
+          },
+          geometry: {
+            type: 'Point',
+            coordinates: [
+              stop.stop_lon,
+              stop.stop_lat
+            ]
+          }
+        }
+      })
+    }
+
+    fs.writeFile(
+      path.join(agencyFolder, `${type}-stop-geo.json`),
+      JSON.stringify(geojson),
+      cb
+    )
+  }
+
   async.auto(
     {
       // see if folder for agency exists
@@ -133,7 +193,7 @@ function analyzeAgency (agency, callback) {
       loadGtfs: ['checkForGtfs', (results, cb) => {
         logger.info('loadGtfs')
         // check if schema already exists, if not, load data into db
-        const db = gtfs.connectToDatabase()
+
         /**
          * Helper fn to create a schema and then load the data
          */
@@ -168,30 +228,125 @@ function analyzeAgency (agency, callback) {
             createSchemaAndLoad
           )
       }],
+      // get serviceIds for magic date
+      getServiceIds: ['loadGtfs', (results, cb) => {
+        const date = moment(ANALYSIS_DATE)
+        const dow = date.day()
+        let dowKey
+        switch (dow) {
+          case 0:
+            dowKey = 'sunday'
+            break
+          case 1:
+            dowKey = 'monday'
+            break
+          case 2:
+            dowKey = 'tuesday'
+            break
+          case 3:
+            dowKey = 'wednesday'
+            break
+          case 4:
+            dowKey = 'thursday'
+            break
+          case 5:
+            dowKey = 'friday'
+            break
+          case 6:
+            dowKey = 'saturday'
+            break
+        }
+
+        const applicableServiceIds = []
+        db.calendar.findAll({
+          include: [db.calendar_date]
+        })
+          .then(calendars => {
+            calendars.forEach(calendar => {
+              // determine if calendar is in range
+              if (
+                moment(calendar.start_date).isSameOrBefore(date) &&
+                moment(calendar.end_date).isSameOrAfter(date)
+              ) {
+                // get default validity
+                let isValid = calendar[dowKey] === 1
+
+                // check if any exception dates apply
+                for (var i = 0; i < calendar.calendar_dates.length; i++) {
+                  const exception = calendar.calendar_dates[i]
+                  if (exception.date === ANALYSIS_DATE) {
+                    // exception applies
+                    if (exception.exception_type === 1) {
+                      isValid = true
+                    } else {
+                      isValid = false
+                    }
+                    break
+                  }
+                }
+
+                if (isValid) {
+                  applicableServiceIds.push(calendar.service_id)
+                }
+              }
+            })
+            cb(null, applicableServiceIds)
+          })
+          .catch(err => {
+            logger.error(err)
+            cb(err)
+          })
+      }],
       // find all active bus stops
-      findAllActiveBusStops: ['loadGtfs', (results, cb) => {
+      findAllActiveBusStops: ['getServiceIds', (results, cb) => {
         logger.info('findAllActiveBusStops')
         // make query for active bus stops
-
-        // make active bus stop point geojson
-
-        cb()
+        makeStopQuery({
+          routeType: ' = 3',
+          serviceIds: results.getServiceIds
+        })
+          .then(stops => {
+            // make active bus stop point geojson
+            outputStopGeojson('bus', stops, cb)
+          })
+          .catch(err => {
+            logger.error(err)
+            cb(err)
+          })
       }],
       // find all rail stops
-      findAllRailStops: ['loadGtfs', (results, cb) => {
+      findAllRailStops: ['getServiceIds', (results, cb) => {
         logger.info('findAllRailStops')
         // make query for active rail stops
-
-        // make active rail stop point geojson
-        cb()
+        makeStopQuery({
+          routeType: ' IN (0, 1, 2)',
+          serviceIds: results.getServiceIds
+        })
+          .then(stops => {
+            // make active rail stop point geojson
+            outputStopGeojson('rail', stops, cb)
+          })
+          .catch(err => {
+            logger.error(err)
+            cb(err)
+          })
       }],
       // find all ferry stops
-      findAllFerryStops: ['loadGtfs', (results, cb) => {
+      findAllFerryStops: ['getServiceIds', (results, cb) => {
         logger.info('findAllFerryStops')
         // make query for active ferry stops
-
-        // make active ferry stop point geojson
-        cb()
+        makeStopQuery({
+          routeType: ' = 4',
+          serviceIds: results.getServiceIds
+        })
+          .then(stops => {
+            // make active ferry stop point geojson
+            outputStopGeojson('ferry', stops, cb)
+          })
+          .catch(err => {
+            logger.error(err)
+            cb(err)
+          })
       }]
       // TODO: bus headway calculations
       // output linestring geometry of applicable bus headway corridors
@@ -204,7 +359,6 @@ function analyzeAgency (agency, callback) {
 module.exports = function (callback) {
   // create queue for anlayzing agencies
   const queue = async.queue(analyzeAgency, MAX_CONCURRENCY)
-  queue.drain(callback)
 
   // asynchronously do stuff
   async.auto(
@@ -237,7 +391,14 @@ module.exports = function (callback) {
     // do nothing on completion as that is handled by the queue drain fn
     (err) => {
       logger.info('All agencies successfully added to processing queue')
-      if (err) return callback(err)
+      queue.drain(() => {
+        logger.info('Queue drain')
+        callback()
+      })
+      if (err) {
+        logger.error(err)
+        return callback(err)
+      }
     }
   )
 }
