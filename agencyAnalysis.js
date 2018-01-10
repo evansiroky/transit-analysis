@@ -75,7 +75,14 @@ function findManuallyCreatedAgencies (agenciesFromTransitFeeds, callback) {
  * Analyze an individual transit agency
  */
 function analyzeAgency (agency, callback) {
-  logger.info('analyzeAgency')
+  /**
+   * Helper to log a message with the agency ID
+   */
+  function log (type, msg) {
+    logger[type](`(${agency.safeId}): ${msg}`)
+  }
+
+  log('info', 'analyzeAgency')
   const agencyFolder = path.join(AGENCY_DATA_DIRECTORY, agency.safeId)
 
   const gtfs = GTFS({
@@ -104,16 +111,10 @@ function analyzeAgency (agency, callback) {
         AND route.route_type ${cfg.routeType}
         AND trip.service_id IN (`
 
-    for (var i = 0; i < cfg.serviceIds.length; i++) {
-      const serviceId = cfg.serviceIds[i]
-      if (i > 0) {
-        query += ', '
-      }
-      query += `'${serviceId}'`
-    }
-
+    query += cfg.serviceIds.map(serviceId => `'${serviceId}'`).join(',')
     query += ')'
 
+    // log('info', query)
     return db.sequelize.query(query, { model: db.stop })
   }
 
@@ -147,12 +148,15 @@ function analyzeAgency (agency, callback) {
     )
   }
 
+  /**
+   * Helper function to run analysis on demand
+   */
   function analyze () {
     async.auto(
       {
         // see if folder for agency exists
         checkFolderExistance: cb => {
-          logger.info('checkFolderExistance')
+          log('info', 'checkFolderExistance')
           fs.stat(agencyFolder, (err, stats) => {
             if (err && err.code === 'ENOENT') {
               // folder does not exist, create it
@@ -168,7 +172,7 @@ function analyzeAgency (agency, callback) {
         },
         // see if gtfs should be downloaded
         checkForGtfs: ['checkFolderExistance', (results, cb) => {
-          logger.info('checkForGtfs')
+          log('info', 'checkForGtfs')
           // TODO: download most recent data
           // for now simply check if a gtfs file exists.  If not, download it
           const agencyGtfs = path.join(agencyFolder, 'google_transit.zip')
@@ -177,7 +181,7 @@ function analyzeAgency (agency, callback) {
               // zip file does not exist, download it
               if (!agency.u || !agency.u.d) {
                 // no download link!
-                logger.warn(`${agency.safeId} does not have a gtfs dl url or gtfs file!`)
+                log('warn', `${agency.safeId} does not have a gtfs dl url or gtfs file!`)
                 cb()
               } else {
                 gtfs.downloadGtfs(cb)
@@ -193,26 +197,26 @@ function analyzeAgency (agency, callback) {
         }],
         // load gtfs into db
         loadGtfs: ['checkForGtfs', (results, cb) => {
-          logger.info('loadGtfs')
+          log('info', 'loadGtfs')
           // check if schema already exists, if not, load data into db
 
           /**
            * Helper fn to create a schema and then load the data
            */
           function createSchemaAndLoad () {
-            logger.info('createSchemaAndLoad')
+            log('info', 'createSchemaAndLoad')
             db.sequelize.query(`create schema if not exists "${agency.safeId}"`)
               .then(() => {
-                logger.info('schema created')
+                log('info', 'schema created')
                 gtfs.loadGtfs(err => {
                   if (err) {
-                    logger.error('error loading gtfs', err)
+                    log('error', 'error loading gtfs', err)
                   }
                   cb(err)
                 })
               })
               .catch(err => {
-                logger.error(err)
+                log('error', err)
                 cb(err)
               })
           }
@@ -260,48 +264,70 @@ function analyzeAgency (agency, callback) {
           }
 
           const applicableServiceIds = []
-          db.calendar.findAll({
-            include: [db.calendar_date]
-          })
-            .then(calendars => {
-              calendars.forEach(calendar => {
-                // determine if calendar is in range
-                if (
-                  moment(calendar.start_date).isSameOrBefore(date) &&
-                  moment(calendar.end_date).isSameOrAfter(date)
-                ) {
-                  // get default validity
-                  let isValid = calendar[dowKey] === 1
 
-                  // check if any exception dates apply
-                  for (var i = 0; i < calendar.calendar_dates.length; i++) {
-                    const exception = calendar.calendar_dates[i]
-                    if (exception.date === ANALYSIS_DATE) {
-                      // exception applies
-                      if (exception.exception_type === 1) {
-                        isValid = true
-                      } else {
-                        isValid = false
+          /**
+           * Helper function to account for a gtfs that doesn't have calendar_dates
+           */
+          function findInTables (calendarDatesExist) {
+            const findParams = calendarDatesExist
+              ? { include: [db.calendar_date] }
+              : {}
+            db.calendar.findAll(findParams)
+              .then(calendars => {
+                calendars.forEach(calendar => {
+                  // determine if calendar is in range
+                  if (
+                    moment(calendar.start_date).isSameOrBefore(date) &&
+                    moment(calendar.end_date).isSameOrAfter(date)
+                  ) {
+                    // get default validity
+                    let isValid = calendar[dowKey] === 1
+
+                    // check if any exception dates apply
+                    if (calendarDatesExist) {
+                      for (var i = 0; i < calendar.calendar_dates.length; i++) {
+                        const exception = calendar.calendar_dates[i]
+                        if (exception.date === ANALYSIS_DATE) {
+                          // exception applies
+                          if (exception.exception_type === 1) {
+                            isValid = true
+                          } else {
+                            isValid = false
+                          }
+                          break
+                        }
                       }
-                      break
+                    }
+
+                    if (isValid) {
+                      applicableServiceIds.push(calendar.service_id)
                     }
                   }
-
-                  if (isValid) {
-                    applicableServiceIds.push(calendar.service_id)
-                  }
-                }
+                })
+                cb(null, applicableServiceIds)
               })
-              cb(null, applicableServiceIds)
+              .catch(err => {
+                log('error', err)
+                cb(err)
+              })
+          }
+
+          // check if calendar_dates exists
+          db.sequelize.query(`SELECT 1 FROM "${agency.safeId}".calendar_date LIMIT 0`)
+            .then(result => {
+              findInTables(true)
             })
             .catch(err => {
-              logger.error(err)
-              cb(err)
+              if (err.message.indexOf('does not exist') > -1) {
+                findInTables(false)
+              } else {
+                cb(err)
+              }
             })
         }],
         // find all active bus stops
         findAllActiveBusStops: ['getServiceIds', (results, cb) => {
-          logger.info('findAllActiveBusStops')
+          log('info', 'findAllActiveBusStops')
           // make query for active bus stops
           makeStopQuery({
             routeType: ' = 3',
@@ -312,13 +338,13 @@ function analyzeAgency (agency, callback) {
               outputStopGeojson('bus', stops, cb)
             })
             .catch(err => {
-              logger.error(err)
+              log('error', err)
               cb(err)
             })
         }],
         // find all rail stops
         findAllRailStops: ['getServiceIds', (results, cb) => {
-          logger.info('findAllRailStops')
+          log('info', 'findAllRailStops')
           // make query for active rail stops
           makeStopQuery({
             routeType: ' IN (0, 1, 2)',
@@ -329,13 +355,13 @@ function analyzeAgency (agency, callback) {
               outputStopGeojson('rail', stops, cb)
             })
             .catch(err => {
-              logger.error(err)
+              log('error', err)
               cb(err)
             })
         }],
         // find all ferry stops
         findAllFerryStops: ['getServiceIds', (results, cb) => {
-          logger.info('findAllFerryStops')
+          log('info', 'findAllFerryStops')
           // make query for active ferry stops
           makeStopQuery({
             routeType: ' = 4',
@@ -346,12 +372,169 @@ function analyzeAgency (agency, callback) {
               outputStopGeojson('ferry', stops, cb)
             })
             .catch(err => {
-              logger.error(err)
+              log('error', err)
+              cb(err)
+            })
+        }],
+        // bus headway calculations
+        calculateBusHeadways: ['getServiceIds', (results, cb) => {
+          log('info', 'calculateBusHeadways')
+          const serviceIdSql = results.getServiceIds.map(serviceId => `'${serviceId}'`).join(',')
+          const directions = [0, 1]
+
+          /**
+           * Calculate all stops that satisfy headway requirements
+           * use a very strict interpretation of bus corridors to make it easier
+           * to produce some output.  Only assume that the 15 minute criteria
+           * excludes interlined routes.  All trips must be from the same route
+           * and have the same direction id to count.  Furthermore, the segment
+           * that a route travels does not count, a radius will be drawn only
+           * from each stop that is served at least every 15 minutes, the parts
+           * between stops don't count.  Also, peak hours are assumed to be 6am to 9am
+           * and 3pm to 6pm.
+           */
+          function getRouteDirectionStopTimes (cfg, stopTimeCallback) {
+            let query = `
+              SELECT stop.stop_id, stop.stop_lat, stop.stop_lon,
+                stop_time.arrival_time
+              FROM "${agency.safeId}".stop stop, "${agency.safeId}".stop_time stop_time, "${agency.safeId}".trip trip
+              WHERE stop.stop_id = stop_time.stop_id
+                AND stop_time.trip_id = trip.trip_id
+                AND trip.route_id = '${cfg.routeId}'
+                AND trip.direction_id = ${cfg.directionId}
+                AND trip.service_id IN (${serviceIdSql})
+                AND stop_time.arrival_time >= ${cfg.beginTime}
+                AND stop_time.arrival_time <= ${cfg.endTime}
+              ORDER BY stop.stop_id, stop_time.arrival_time ASC`
+
+            // log('info', query)
+            db.sequelize.query(query)
+              .then(rows => {
+                if (rows[0].length === 0) {
+                  return stopTimeCallback(null, {})
+                }
+
+                // got rows, calculate headways at each stop
+                const peakStopsWith15MinHeadways = {}
+                let curStop = {}
+                let maxHeadway
+                let lastArrivalTime
+
+                /**
+                 * Helper to check on stop stats to calculate if it met
+                 * headway requirement
+                 */
+                function resolveLastStopTimeForStop () {
+                  maxHeadway = Math.max(maxHeadway, cfg.endTime - curStop.arrival_time)
+                  if (maxHeadway <= 900) {
+                    peakStopsWith15MinHeadways[curStop.stop_id] = curStop
+                  }
+                }
+
+                rows[0].forEach(row => {
+                  // log('info', row)
+                  if (row.stop_id !== curStop.stop_id) {
+                    if (curStop.stop_id) {
+                      resolveLastStopTimeForStop()
+                    }
+                    curStop = row
+                    maxHeadway = curStop.arrival_time - cfg.beginTime
+                  } else {
+                    curStop = row
+                    maxHeadway = Math.max(maxHeadway, curStop.arrival_time - lastArrivalTime)
+                  }
+                  lastArrivalTime = curStop.arrival_time
+                })
+                resolveLastStopTimeForStop()
+                stopTimeCallback(null, peakStopsWith15MinHeadways)
+              })
+              .catch(err => {
+                log('error', err)
+                stopTimeCallback(err)
+              })
+          }
+
+          /**
+           * Calculate the stop_times with at least a 15 minute headway
+           * Headways must be at most 15 minutes during both peak periods
+           */
+          function calculateRouteDirectionHeadways (cfg, routeDirectionCallback) {
+            async.auto(
+              {
+                calculateMorningPeakStopTimes: morningPeakCallback => {
+                  getRouteDirectionStopTimes(
+                    {
+                      beginTime: 21600, // 6am
+                      endTime: 32400, // 9am
+                      directionId: cfg.directionId,
+                      routeId: cfg.routeId
+                    },
+                    morningPeakCallback
+                  )
+                },
+                calculateAfternoonPeakStopTimes: afternoonPeakCallback => {
+                  getRouteDirectionStopTimes(
+                    {
+                      beginTime: 54000, // 3pm
+                      endTime: 64800, // 6pm
+                      directionId: cfg.directionId,
+                      routeId: cfg.routeId
+                    },
+                    afternoonPeakCallback
+                  )
+                },
+                calculateStopsWithGoodHeadwaysInBothPeaks: [
+                  'calculateMorningPeakStopTimes',
+                  'calculateAfternoonPeakStopTimes',
+                  (results, bothPeaksCallback) => {
+                    Object.keys(results.calculateMorningPeakStopTimes).forEach(stopId => {
+                      if (results.calculateAfternoonPeakStopTimes[stopId]) {
+                        stopsWith15MinHeadways[stopId] = results.calculateAfternoonPeakStopTimes[stopId]
+                      }
+                    })
+                    bothPeaksCallback()
+                  }
+                ]
+              },
+              routeDirectionCallback
+            )
+          }
+
+          const routeDirectionCalcQueue = async.queue(calculateRouteDirectionHeadways, MAX_CONCURRENCY)
+
+          const stopsWith15MinHeadways = {}
+
+          db.route.findAll({
+            where: {
+              route_type: 3
+            }
+          })
+            .then(routes => {
+              routes.forEach(route => {
+                directions.forEach(directionId => {
+                  routeDirectionCalcQueue.push({
+                    directionId: directionId,
+                    routeId: route.route_id
+                  })
+                })
+              })
+
+              routeDirectionCalcQueue.drain = () => {
+                log('info', 'done calculating good frequency stops')
+                outputStopGeojson(
+                  'good-headway-bus',
+                  Object.keys(stopsWith15MinHeadways).map(
+                    key => stopsWith15MinHeadways[key]
+                  ),
+                  cb
+                )
+              }
+            })
+            .catch(err => {
+              log('error', err)
               cb(err)
             })
         }]
-        // TODO: bus headway calculations
-        // output linestring geometry of applicable bus headway corridors
       },
       callback
     )

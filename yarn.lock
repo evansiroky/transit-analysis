@@ -898,9 +898,9 @@ graceful-fs@~3.0.2:
   version "1.0.1"
   resolved "https://registry.yarnpkg.com/graceful-readlink/-/graceful-readlink-1.0.1.tgz#4cafad76bc62f02fa039b2f94e9a3dd3a391a725"
 
-gtfs-sequelize@^2.0.1:
-  version "2.0.1"
-  resolved "https://registry.yarnpkg.com/gtfs-sequelize/-/gtfs-sequelize-2.0.1.tgz#99ea3b3302ca722528bbe6dde92533a12f0836d7"
+gtfs-sequelize@^2.0.2:
+  version "2.0.2"
+  resolved "https://registry.yarnpkg.com/gtfs-sequelize/-/gtfs-sequelize-2.0.2.tgz#d5835e74f898535cc54297e3ad8074127369b50e"
   dependencies:
     async "^2.0.0-rc.5"
     csvtojson "^1.1.9"
