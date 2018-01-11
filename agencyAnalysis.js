@@ -9,7 +9,7 @@ const logger = require('tracer').colorConsole()
 
 const config = require('./config.json')
 
-const AGENCY_DATA_DIRECTORY = './agency-data'
+const AGENCY_DATA_DIRECTORY = config.agencyDataDirectory
 const ANALYSIS_DATE = '20180110'
 const MAX_CONCURRENCY = 4
 
@@ -78,11 +78,11 @@ function analyzeAgency (agency, callback) {
   /**
    * Helper to log a message with the agency ID
    */
-  function log (type, msg) {
-    logger[type](`(${agency.safeId}): ${msg}`)
+  function alog (msg) {
+    return `(${agency.safeId}): ${msg}`
   }
 
-  log('info', 'analyzeAgency')
+  logger.info(alog('analyzeAgency'))
   const agencyFolder = path.join(AGENCY_DATA_DIRECTORY, agency.safeId)
 
   const gtfs = GTFS({
@@ -114,7 +114,7 @@ function analyzeAgency (agency, callback) {
     query += cfg.serviceIds.map(serviceId => `'${serviceId}'`).join(',')
     query += ')'
 
-    // log('info', query)
+    // logger.info(alog(query))
     return db.sequelize.query(query, { model: db.stop })
   }
 
@@ -156,7 +156,7 @@ function analyzeAgency (agency, callback) {
       {
         // see if folder for agency exists
         checkFolderExistance: cb => {
-          log('info', 'checkFolderExistance')
+          logger.info(alog('checkFolderExistance'))
           fs.stat(agencyFolder, (err, stats) => {
             if (err && err.code === 'ENOENT') {
               // folder does not exist, create it
@@ -172,7 +172,7 @@ function analyzeAgency (agency, callback) {
         },
         // see if gtfs should be downloaded
         checkForGtfs: ['checkFolderExistance', (results, cb) => {
-          log('info', 'checkForGtfs')
+          logger.info(alog('checkForGtfs'))
           // TODO: download most recent data
           // for now simply check if a gtfs file exists.  If not, download it
           const agencyGtfs = path.join(agencyFolder, 'google_transit.zip')
@@ -181,7 +181,7 @@ function analyzeAgency (agency, callback) {
               // zip file does not exist, download it
               if (!agency.u || !agency.u.d) {
                 // no download link!
-                log('warn', `${agency.safeId} does not have a gtfs dl url or gtfs file!`)
+                logger.warn(alog(`${agency.safeId} does not have a gtfs dl url or gtfs file!`))
                 cb()
               } else {
                 gtfs.downloadGtfs(cb)
@@ -197,26 +197,27 @@ function analyzeAgency (agency, callback) {
         }],
         // load gtfs into db
         loadGtfs: ['checkForGtfs', (results, cb) => {
-          log('info', 'loadGtfs')
+          logger.info(alog('loadGtfs'))
           // check if schema already exists, if not, load data into db
 
           /**
            * Helper fn to create a schema and then load the data
            */
           function createSchemaAndLoad () {
-            log('info', 'createSchemaAndLoad')
+            logger.info(alog('createSchemaAndLoad'))
             db.sequelize.query(`create schema if not exists "${agency.safeId}"`)
               .then(() => {
-                log('info', 'schema created')
+                logger.info(alog('schema created'))
                 gtfs.loadGtfs(err => {
                   if (err) {
-                    log('error', 'error loading gtfs', err)
+                    logger.error(alog('error loading gtfs'))
+                    logger.error(alog(err))
                   }
                   cb(err)
                 })
               })
               .catch(err => {
-                log('error', err)
+                logger.error(alog(err))
                 cb(err)
               })
           }
@@ -307,7 +308,7 @@ function analyzeAgency (agency, callback) {
                 cb(null, applicableServiceIds)
               })
               .catch(err => {
-                log('error', err)
+                logger.error(alog(err))
                 cb(err)
               })
           }
@@ -327,7 +328,7 @@ function analyzeAgency (agency, callback) {
         }],
         // find all active bus stops
         findAllActiveBusStops: ['getServiceIds', (results, cb) => {
-          log('info', 'findAllActiveBusStops')
+          logger.info(alog('findAllActiveBusStops'))
           // make query for active bus stops
           makeStopQuery({
             routeType: ' = 3',
@@ -338,13 +339,13 @@ function analyzeAgency (agency, callback) {
               outputStopGeojson('bus', stops, cb)
             })
             .catch(err => {
-              log('error', err)
+              logger.error(alog(err))
               cb(err)
             })
         }],
         // find all rail stops
         findAllRailStops: ['getServiceIds', (results, cb) => {
-          log('info', 'findAllRailStops')
+          logger.info(alog('findAllRailStops'))
           // make query for active rail stops
           makeStopQuery({
             routeType: ' IN (0, 1, 2)',
@@ -355,13 +356,13 @@ function analyzeAgency (agency, callback) {
               outputStopGeojson('rail', stops, cb)
             })
             .catch(err => {
-              log('error', err)
+              logger.error(alog(err))
               cb(err)
             })
         }],
         // find all ferry stops
         findAllFerryStops: ['getServiceIds', (results, cb) => {
-          log('info', 'findAllFerryStops')
+          logger.info(alog('findAllFerryStops'))
           // make query for active ferry stops
           makeStopQuery({
             routeType: ' = 4',
@@ -372,13 +373,13 @@ function analyzeAgency (agency, callback) {
               outputStopGeojson('ferry', stops, cb)
             })
             .catch(err => {
-              log('error', err)
+              logger.error(alog(err))
               cb(err)
             })
         }],
         // bus headway calculations
         calculateBusHeadways: ['getServiceIds', (results, cb) => {
-          log('info', 'calculateBusHeadways')
+          logger.info(alog('calculateBusHeadways'))
           const serviceIdSql = results.getServiceIds.map(serviceId => `'${serviceId}'`).join(',')
           const directions = [0, 1]
 
@@ -407,7 +408,7 @@ function analyzeAgency (agency, callback) {
                 AND stop_time.arrival_time <= ${cfg.endTime}
               ORDER BY stop.stop_id, stop_time.arrival_time ASC`
 
-            // log('info', query)
+            // logger.info(alog(query))
             db.sequelize.query(query)
               .then(rows => {
                 if (rows[0].length === 0) {
@@ -432,7 +433,7 @@ function analyzeAgency (agency, callback) {
                 }
 
                 rows[0].forEach(row => {
-                  // log('info', row)
+                  // logger.info(alog(row))
                   if (row.stop_id !== curStop.stop_id) {
                     if (curStop.stop_id) {
                       resolveLastStopTimeForStop()
@@ -449,7 +450,7 @@ function analyzeAgency (agency, callback) {
                 stopTimeCallback(null, peakStopsWith15MinHeadways)
               })
               .catch(err => {
-                log('error', err)
+                logger.error(alog(err))
                 stopTimeCallback(err)
               })
           }
@@ -520,7 +521,7 @@ function analyzeAgency (agency, callback) {
               })
 
               routeDirectionCalcQueue.drain = () => {
-                log('info', 'done calculating good frequency stops')
+                logger.info(alog('done calculating good frequency stops'))
                 outputStopGeojson(
                   'good-headway-bus',
                   Object.keys(stopsWith15MinHeadways).map(
@@ -531,7 +532,7 @@ function analyzeAgency (agency, callback) {
               }
             })
             .catch(err => {
-              log('error', err)
+              logger.error(alog(err))
               cb(err)
             })
         }]
@@ -543,14 +544,22 @@ function analyzeAgency (agency, callback) {
   // check if output files have already been generated
   // if so assume already complete from earlier run
   fs.stat(path.join(agencyFolder, 'bus-stop-geo.json'), (err, stats) => {
-    if (err && err.code === 'ENOENT') {
-      // file does not exist, perform analysis
-      analyze()
-    } else if (err) {
-      // some other error
-      callback(err)
+    if (err) {
+      if (err.code === 'ENOENT') {
+        // file does not exist, perform analysis
+        analyze()
+      } else if (err.code === 'ENOTDIR') {
+        // not a directory, skip
+        logger.info(alog('not a directory, skipping calculation'))
+        callback()
+      } else {
+        // some other error
+        logger.error(alog(err))
+        callback(err)
+      }
     } else {
       // output exists, assume no need to recalculate
+      logger.info(alog('output exists, skipping calculation'))
       callback()
     }
   })
@@ -577,7 +586,7 @@ module.exports = function (callback) {
         'findAgenciesOnTransitFeeds',
         (results, cb) => {
           // TODO: uncomment for full analysis
-          queue.push(results.findAgenciesOnTransitFeeds[0])
+          queue.push(results.findAgenciesOnTransitFeeds)
           cb()
         }
       ],
@@ -592,10 +601,10 @@ module.exports = function (callback) {
     // do nothing on completion as that is handled by the queue drain fn
     (err) => {
       logger.info('All agencies successfully added to processing queue')
-      queue.drain(() => {
+      queue.drain = () => {
         logger.info('Queue drain')
         callback()
-      })
+      }
       if (err) {
         logger.error(err)
         return callback(err)
