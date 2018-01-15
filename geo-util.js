@@ -208,48 +208,70 @@ function makeCombineStopsFn (cfg) {
       type: 'FeatureCollection',
       features: []
     }
-    cfg.agencies.forEach(agency => {
-      const agencyStops = require(
-        './' + path.join(
-          AGENCY_DATA_DIRECTORY,
-          agency,
-          cfg.type + '-stop-geo.json'
+    // filter agencies with no calculations
+    async.filter(
+      cfg.agencies,
+      (agency, fileCallback) => {
+        fs.stat(
+          path.join(
+            AGENCY_DATA_DIRECTORY,
+            agency,
+            cfg.type + '-stop-geo.json'
+          ),
+          fileCallback
         )
-      )
+      },
+      (err, agencies) => {
+        if (err) return callback(err)
+        agencies.forEach(agency => {
+          const agencyStops = require(
+            './' + path.join(
+              AGENCY_DATA_DIRECTORY,
+              agency,
+              cfg.type + '-stop-geo.json'
+            )
+          )
 
-      // hacky thing: only add stops within CA for agencies with known stops outside CA
-      if (agency === 'amtrak') {
-        agencyStops.features.forEach(stop => {
-          const stopGeom = geoJsonToGeom(stop.geometry)
-          if (cfg.caBoundary.contains(stopGeom)) {
-            geojson.features.push(stop)
+          // hacky thing: only add stops within CA for agencies with known stops outside CA
+          if (agency === 'amtrak') {
+            agencyStops.features.forEach(stop => {
+              const stopGeom = geoJsonToGeom(stop.geometry)
+              if (cfg.caBoundary.contains(stopGeom)) {
+                geojson.features.push(stop)
+              }
+            })
+          } else {
+            geojson.features = geojson.features.concat(agencyStops.features)
           }
         })
-      } else {
-        geojson.features = geojson.features.concat(agencyStops.features)
-      }
-    })
 
-    // write geojson to file
-    const stopGeojsonPath = path.join(STATE_DATA_DIRECTORY, `${cfg.type}-stop-geo.json`)
-    fs.writeFile(
-      stopGeojsonPath,
-      JSON.stringify(geojson),
-      (err) => {
-        if (err) return callback(err)
-        // create shapefile
-        const stopShapefilePath = path.join(STATE_DATA_DIRECTORY, `${cfg.type}-stop.shp`)
-        // remove old shapefile so ogr2ogr can work
-        rimraf(stopShapefilePath, err => {
-          if (err) return callback(err)
-          exec(
-            `ogr2ogr -nlt POINT "${stopShapefilePath}" "${stopGeojsonPath}" OGRGeoJSON`,
-            (err, stdout, stderr) => {
-              if (err) return callback(err)
-              callback(null, geojson)
-            }
-          )
+        // write geojson to file
+        const stopGeojsonPath = path.join(STATE_DATA_DIRECTORY, `${cfg.type}-stop-geo.json`)
+        var stream = fs.createWriteStream(stopGeojsonPath)
+        // write via stream, cause it can get too big for JSON.stringify!
+        stream.write('{"type":"FeatureCollection","features":[')
+        geojson.features.forEach((feature, idx) => {
+          stream.write((idx > 0 ? ',' : '') + JSON.stringify(feature))
         })
+        stream.end(
+          ']}',
+          (err) => {
+            if (err) return callback(err)
+            // create shapefile
+            const stopShapefilePath = path.join(STATE_DATA_DIRECTORY, `${cfg.type}-stop.shp`)
+            // remove old shapefile so ogr2ogr can work
+            rimraf(stopShapefilePath, err => {
+              if (err) return callback(err)
+              exec(
+                `ogr2ogr -nlt POINT "${stopShapefilePath}" "${stopGeojsonPath}" OGRGeoJSON`,
+                (err, stdout, stderr) => {
+                  if (err) return callback(err)
+                  callback(null, geojson)
+                }
+              )
+            })
+          }
+        )
       }
     )
   }

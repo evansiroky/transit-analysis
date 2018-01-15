@@ -10,8 +10,8 @@ const logger = require('tracer').colorConsole()
 const config = require('./config.json')
 
 const AGENCY_DATA_DIRECTORY = config.agencyDataDirectory
-const ANALYSIS_DATE = '20180110'
-const MAX_CONCURRENCY = 4
+const ANALYSIS_DATE = '20180216'
+const MAX_CONCURRENCY = 1
 
 /**
  * Find all agencies in California according to transitfeeds
@@ -90,6 +90,7 @@ function analyzeAgency (agency, callback) {
     downloadsDir: agencyFolder,
     gtfsFileOrFolder: 'google_transit.zip',
     gtfsUrl: agency.u ? agency.u.d : null,
+    interpolateStopTimes: true,
     sequelizeOptions: {
       logging: false,
       schema: agency.safeId
@@ -305,6 +306,9 @@ function analyzeAgency (agency, callback) {
                     }
                   }
                 })
+                if (applicableServiceIds.length === 0) {
+                  logger.warn(alog('No active schedules!'))
+                }
                 cb(null, applicableServiceIds)
               })
               .catch(err => {
@@ -329,6 +333,9 @@ function analyzeAgency (agency, callback) {
         // find all active bus stops
         findAllActiveBusStops: ['getServiceIds', (results, cb) => {
           logger.info(alog('findAllActiveBusStops'))
+          if (results.getServiceIds.length === 0) {
+            return outputStopGeojson('bus', [], cb)
+          }
           // make query for active bus stops
           makeStopQuery({
             routeType: ' = 3',
@@ -346,6 +353,9 @@ function analyzeAgency (agency, callback) {
         // find all rail stops
         findAllRailStops: ['getServiceIds', (results, cb) => {
           logger.info(alog('findAllRailStops'))
+          if (results.getServiceIds.length === 0) {
+            return outputStopGeojson('rail', [], cb)
+          }
           // make query for active rail stops
           makeStopQuery({
             routeType: ' IN (0, 1, 2)',
@@ -363,6 +373,9 @@ function analyzeAgency (agency, callback) {
         // find all ferry stops
         findAllFerryStops: ['getServiceIds', (results, cb) => {
           logger.info(alog('findAllFerryStops'))
+          if (results.getServiceIds.length === 0) {
+            return outputStopGeojson('ferry', [], cb)
+          }
           // make query for active ferry stops
           makeStopQuery({
             routeType: ' = 4',
@@ -380,6 +393,9 @@ function analyzeAgency (agency, callback) {
         // bus headway calculations
         calculateBusHeadways: ['getServiceIds', (results, cb) => {
           logger.info(alog('calculateBusHeadways'))
+          if (results.getServiceIds.length === 0) {
+            return outputStopGeojson('good-headway-bus', [], cb)
+          }
           const serviceIdSql = results.getServiceIds.map(serviceId => `'${serviceId}'`).join(',')
           const directions = [0, 1]
 
@@ -511,6 +527,9 @@ function analyzeAgency (agency, callback) {
             }
           })
             .then(routes => {
+              if (routes.length === 0) {
+                return outputStopGeojson('good-headway-bus', [], cb)
+              }
               routes.forEach(route => {
                 directions.forEach(directionId => {
                   routeDirectionCalcQueue.push({
@@ -537,7 +556,10 @@ function analyzeAgency (agency, callback) {
             })
         }]
       },
-      callback
+      err => {
+        db.sequelize.close()
+        callback(err)
+      }
     )
   }
 
@@ -585,7 +607,6 @@ module.exports = function (callback) {
       addTransitFeedsAgencies: [
         'findAgenciesOnTransitFeeds',
         (results, cb) => {
-          // TODO: uncomment for full analysis
           queue.push(results.findAgenciesOnTransitFeeds)
           cb()
         }

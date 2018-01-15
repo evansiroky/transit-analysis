@@ -389,9 +389,9 @@ dateformat@2.0.0:
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/dateformat/-/dateformat-2.0.0.tgz#2743e3abb5c3fc2462e527dca445e04e9f4dee17"
 
-db-streamer@^1.1.0:
-  version "1.1.0"
-  resolved "https://registry.yarnpkg.com/db-streamer/-/db-streamer-1.1.0.tgz#7e21ffc5b41e16198773bcff8819e11dafbc3844"
+db-streamer@^1.2.1:
+  version "1.2.1"
+  resolved "https://registry.yarnpkg.com/db-streamer/-/db-streamer-1.2.1.tgz#102e81b58b2a0c21c595747536cffc393d383f47"
   dependencies:
     async "^2.1.2"
     moment "^2.11.2"
@@ -989,13 +989,13 @@ graceful-fs@~3.0.2:
   version "1.0.1"
   resolved "https://registry.yarnpkg.com/graceful-readlink/-/graceful-readlink-1.0.1.tgz#4cafad76bc62f02fa039b2f94e9a3dd3a391a725"
 
-gtfs-sequelize@^2.0.2:
-  version "2.0.2"
-  resolved "https://registry.yarnpkg.com/gtfs-sequelize/-/gtfs-sequelize-2.0.2.tgz#d5835e74f898535cc54297e3ad8074127369b50e"
+gtfs-sequelize@^3.0.1:
+  version "3.0.1"
+  resolved "https://registry.yarnpkg.com/gtfs-sequelize/-/gtfs-sequelize-3.0.1.tgz#fe9e5986edeb77e16fa7433e5e5adbd897eb1feb"
   dependencies:
     async "^2.0.0-rc.5"
     csvtojson "^1.1.9"
-    db-streamer "^1.1.0"
+    db-streamer "^1.2.1"
     download "^6.2.5"
     ftp "^0.3.10"
     moment "^2.10.6"
@@ -1610,6 +1610,10 @@ pg-copy-streams@^1.2.0:
   version "1.2.0"
   resolved "https://registry.yarnpkg.com/pg-copy-streams/-/pg-copy-streams-1.2.0.tgz#7b3f9dee0b6c5fc2068f59c40fa218e0c1d74249"
 
+pg-cursor@1.3.0:
+  version "1.3.0"
+  resolved "https://registry.yarnpkg.com/pg-cursor/-/pg-cursor-1.3.0.tgz#b220f1908976b7b40daa373c7ada5fca823ab0d9"
+
 pg-hstore@^2.3.2:
   version "2.3.2"
   resolved "https://registry.yarnpkg.com/pg-hstore/-/pg-hstore-2.3.2.tgz#f7ef053e7b9b892ae986af2f7cbe86432dfcf24f"
@@ -1626,6 +1630,12 @@ pg-pool@1.*:
   dependencies:
     generic-pool "2.4.3"
     object-assign "4.1.0"
+
+pg-query-stream@^1.1.1:
+  version "1.1.1"
+  resolved "https://registry.yarnpkg.com/pg-query-stream/-/pg-query-stream-1.1.1.tgz#65e97436ef809d1e160eba84ebf11b9e4742eab4"
+  dependencies:
+    pg-cursor "1.3.0"
 
 pg-types@1.*:
   version "1.13.0"
